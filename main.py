@@ -38,31 +38,26 @@ def seed_worker(worker_id):
 ##########################################################################
 """Basic Settings"""
 
-dataset = 'Metz'
-drug_maxlen = 80
-target_maxlen = 1000
-# dataset = 'KIBA'
-# drug_maxlen = 100
-# target_maxlen = 1000
 
-#############
-"""Dataset split according to random seed"""
-from process_metz import process_data
-process_data(dataset, drug_maxlen, target_maxlen, random_state=seed)
-#############
+dataset = 'Davis'
+drug_maxlen = 85  # Modify according to the dataset
+target_maxlen = 1200  # Modify according to the dataset
 
+# Set up result directory
+result_path = f'runs/{dataset}'
 
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-result_path = f'runs/{dataset}_{timestamp}'
 os.makedirs(result_path, exist_ok=True)
 csv_log = True
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-batch_size = 32
-accumulation_steps = 8
+
+batch_size = 32  # Modify according to the dataset
+accumulation_steps = 8  # Modify according to the dataset
 learning_rate = 0.001
 num_epochs = 600
+
+dropout = 0.1
 
 d_model = 128
 d_ff = 512
@@ -79,18 +74,22 @@ class Transformer(nn.Module):
     def __init__(self):
         super(Transformer, self).__init__()
 
-        self.encoderD = Encoder(45, ST_size)
-        self.encoderT = Encoder(33, ESM_size)
+
+        self.encoderD = Encoder(45, ST_size)  # SMILES Transformer vocabulary Size = 45
+        self.encoderT = Encoder(33, ESM_size)  # ESM2 vocabulary Size = 33
         self.fc0 = nn.Sequential(
             nn.Linear(2*d_model, 8*d_model, bias=False),
             nn.LayerNorm(8*d_model),
-            nn.Dropout(0.3),
+            nn.Dropout(dropout),
+
             nn.ReLU(inplace=True)
         )
         self.fc1 = nn.Sequential(
             nn.Linear(8*d_model, 4*d_model, bias=False),
             nn.LayerNorm(4*d_model),
-            nn.Dropout(0.3),
+
+            nn.Dropout(dropout),
+
             nn.ReLU(inplace=True)
         )
         self.fc2 = nn.Linear(4*d_model, 1, bias=False)
@@ -100,14 +99,16 @@ class Transformer(nn.Module):
         enc_Drugs, enc_attnsD1, enc_attnsD2 = self.encoderD(input_Drugs, drug_pretrained)
         enc_Tars, enc_attnsT1, enc_attnsT2 = self.encoderT(input_Tars, target_pretrained)
 
-        # enc_Drugs_2D0 = torch.sum(enc_Drugs, dim=1)
-        # enc_Drugs_2D1 = enc_Drugs_2D0.squeeze()
-        # enc_Tars_2D0 = torch.sum(enc_Tars, dim=1)
-        # enc_Tars_2D1 = enc_Tars_2D0.squeeze()
-        # fc = torch.cat((enc_Drugs_2D1, enc_Tars_2D1), 1)
-        enc_Drugs_2D = torch.mean(enc_Drugs, dim=1)
-        enc_Tars_2D = torch.mean(enc_Tars, dim=1)
-        fc = torch.cat((enc_Drugs_2D, enc_Tars_2D), 1)
+
+        enc_Drugs_2D0 = torch.sum(enc_Drugs, dim=1)
+        enc_Drugs_2D1 = enc_Drugs_2D0.squeeze()
+        enc_Tars_2D0 = torch.sum(enc_Tars, dim=1)
+        enc_Tars_2D1 = enc_Tars_2D0.squeeze()
+        fc = torch.cat((enc_Drugs_2D1, enc_Tars_2D1), 1)
+        # enc_Drugs_2D = torch.mean(enc_Drugs, dim=1)
+        # enc_Tars_2D = torch.mean(enc_Tars, dim=1)
+        # fc = torch.cat((enc_Drugs_2D, enc_Tars_2D), 1)
+
 
         fc0 = self.fc0(fc)
         fc1 = self.fc1(fc0)
@@ -319,8 +320,17 @@ kfold = KFold(n_splits=5, shuffle=False)
 
 train_dataset = DrugTargetDataset(dataset=dataset, drug_maxlen=drug_maxlen, target_maxlen=target_maxlen, mode='train')
 
+
+
+
+run_fold = 0  # Set to 0-4 to run specific fold
+
+fold_result_path = os.path.join(result_path, f'fold_{fold}')
+os.makedirs(fold_result_path, exist_ok=True)
+
 if csv_log:
-    result_file = os.path.join(result_path, 'TrainingLog.csv')
+    result_file = os.path.join(fold_result_path, 'TrainingLog.csv')
+
 
     log_columns = ['fold', 'epoch', 'lr', 'epoch_time', 'train_loss', 'val_loss', 
                        'train_ci', 'val_ci', 'train_rm2', 'val_rm2',]
@@ -329,7 +339,7 @@ if csv_log:
         writer = csv.DictWriter(file, fieldnames=log_columns)
         writer.writeheader()
 
-run_fold = 0
+
 for fold, (train_idx, val_idx) in enumerate(kfold.split(range(len(train_dataset)))):
     if fold != run_fold:
         continue
@@ -340,8 +350,7 @@ for fold, (train_idx, val_idx) in enumerate(kfold.split(range(len(train_dataset)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=15, factor=0.5, min_lr=1e-5)
     early_stopping = EarlyStopping(patience=30, verbose=False)
 
-    fold_result_path = os.path.join(result_path, f'fold_{fold}')
-    os.makedirs(fold_result_path, exist_ok=True)
+
 
     print(f"################ fold {fold+1} train starts! ################\n")
     train_subset = Subset(train_dataset, train_idx)
@@ -514,26 +523,27 @@ def test_model(model_path, save_csv_path=None):
     
     average_test_loss = total_test_loss / len(test_loader)
     
-    # 计算评估指标
+    # compute metrics
+
     test_MSE = EM.get_MSE(test_real_affi, test_pred_affi)
     test_CI = EM.get_ci(test_real_affi, test_pred_affi)
     test_rm2 = EM.get_rm2(test_real_affi, test_pred_affi)
     
     print(f"Test Results for {model_path} saved in epoch {epoch} with train loss {train_loss} \ntest Loss: {average_test_loss:.4f}, MSE: {test_MSE:.4f}, CI: {test_CI:.4f}, RM2: {test_rm2:.4f}")
 
-    # 保存到csv
+    # save predicted and real affinity values to csv
     if save_csv_path is not None:
         df = pd.DataFrame({
             'Real_Affinity': test_real_affi,
             'Predicted_Affinity': test_pred_affi
         })
         df.to_csv(save_csv_path, index=False)
-        print(f"预测值和真实值已保存到: {save_csv_path}")
+        print(f"Predicted and actual values have been saved to: {save_csv_path}")
 
 model_paths = [
-    os.path.join(result_path, f'fold_{run_fold}', 'best_train_model.pth'),
-    os.path.join(result_path, f'fold_{run_fold}', 'best_val_model.pth'),
-    os.path.join(result_path, f'fold_{run_fold}', 'final_model.pth')
+    os.path.join(fold_result_path, 'best_train_model.pth'),
+    os.path.join(fold_result_path, 'best_val_model.pth'),
+    os.path.join(fold_result_path, 'final_model.pth')
 ]
 
 for model_path in model_paths:

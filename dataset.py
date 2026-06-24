@@ -31,8 +31,6 @@ class DrugTargetDataset(Dataset):
         drugs_pt_path = os.path.join(data_path, dataset, 'drug_ST.pt')
         self.drug_pretrained_dict = torch.load(drugs_pt_path, map_location='cpu')
 
-        print(f"Loaded drug pretrained embeddings: {len(self.drug_pretrained_dict)} drugs")
-
         # =========================
         # Pre-trained target embedding (.pt)
         # =========================
@@ -91,9 +89,9 @@ class DrugTargetDataset(Dataset):
 if __name__ == '__main__':
 
     dataset = DrugTargetDataset(
-        dataset='Metz',
-        drug_maxlen=80,
-        target_maxlen=1000,
+        dataset='Davis',
+        drug_maxlen=85,
+        target_maxlen=1200,
         mode='test'
     )
 
